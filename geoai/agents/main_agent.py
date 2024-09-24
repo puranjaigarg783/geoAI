@@ -1,39 +1,41 @@
-from langchain.agents import AgentExecutor, Tool
+from langchain.agents import initialize_agent, Tool
 from langchain.llms import Ollama
-from langchain.prompts import PromptTemplate
-from utils.config import OLLAMA_API_URL
-from langgraph.graph import Graph
-from agents.data_agent import DataAgent
-from agents.detection_agent import DetectionAgent
+from utils.config import OLLAMA_API_URL, OLLAMA_MODEL_NAME
+from agents.code_generation_agent import CodeGenerationAgent
+from agents.execution_agent import ExecutionAgent
 from agents.synthesis_agent import SynthesisAgent
 
 class MainAgent:
     def __init__(self):
-        self.llm = Ollama(base_url=OLLAMA_API_URL, model='your-llm-model-name')
-        self.prompt_template = PromptTemplate(
-            input_variables=["query"],
-            template="You are an AI assistant that interprets the following user query and decides which tools to use: {query}"
-        )
+        self.llm = Ollama(base_url=OLLAMA_API_URL, model=OLLAMA_MODEL_NAME)
+        self.code_gen_agent = CodeGenerationAgent()
+        self.execution_agent = ExecutionAgent()
+        self.synthesis_agent = SynthesisAgent()
         self.tools = [
-            Tool(name="DataAgent", func=DataAgent().run, description="Retrieves geospatial data"),
-            Tool(name="DetectionAgent", func=DetectionAgent().run, description="Detects pools in geospatial data"),
-            Tool(name="SynthesisAgent", func=SynthesisAgent().run, description="Generates map and report")
+            Tool(
+                name="CodeGenerator",
+                func=self.code_gen_agent.generate_code,
+                description="Generates code based on user query."
+            ),
+            Tool(
+                name="CodeExecutor",
+                func=self.execution_agent.execute,
+                description="Executes generated code securely."
+            ),
+            Tool(
+                name="ResultSynthesizer",
+                func=self.synthesis_agent.synthesize,
+                description="Summarizes execution output."
+            ),
         ]
-        self.agent = AgentExecutor.from_agent_and_tools(
-            agent=self.llm,
+        self.agent = initialize_agent(
             tools=self.tools,
+            llm=self.llm,
+            agent="zero-shot-react-description",
             verbose=True
         )
-        self.graph = Graph()
 
     def run(self, query):
-        data_node = self.graph.add_node(DataAgent().run, name='DataAgent')
-        detection_node = self.graph.add_node(DetectionAgent().run, name='DetectionAgent')
-        synthesis_node = self.graph.add_node(SynthesisAgent().run, name='SynthesisAgent')
-
-        self.graph.add_edge(data_node, detection_node)
-        self.graph.add_edge(detection_node, synthesis_node)
-
-        result = self.graph.execute()
+        result = self.agent.run(query)
         return result
 

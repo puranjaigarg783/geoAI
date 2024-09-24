@@ -1,14 +1,15 @@
-from utils.ollama_utils import ollama_generate
+from langchain.llms import Ollama
+from langchain.prompts import PromptTemplate
+from utils.config import OLLAMA_API_URL, OLLAMA_MODEL_NAME
 
 class CodeGenerationAgent:
     def __init__(self):
-        pass
-
-    def generate_code(self, query):
-        """
-        Uses the LLM to generate code based on the user's query.
-        """
-        prompt = f"""
+        # Initialize the LLM using LangChain's Ollama interface
+        self.llm = Ollama(base_url=OLLAMA_API_URL, model=OLLAMA_MODEL_NAME)
+        # Define the prompt template using LangChain's PromptTemplate
+        self.prompt_template = PromptTemplate(
+            input_variables=["query"],
+            template="""
 You are an assistant that generates Python code to perform geospatial analysis using Prithvi models.
 
 User Query:
@@ -25,6 +26,12 @@ Constraints:
 
 Generated Python Code:
 """
-        code = ollama_generate(prompt)
-        return code.strip()
+        )
+
+    def generate_code(self, query):
+        # Render the prompt with the user's query
+        prompt = self.prompt_template.format(query=query)
+        # Use the LLM to generate the code
+        response = self.llm(prompt)
+        return response.strip()
 

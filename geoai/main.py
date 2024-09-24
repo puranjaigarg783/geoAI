@@ -1,16 +1,12 @@
-from workflows.dynamic_workflow import DynamicWorkflow
+from agents.main_agent import MainAgent
 
 def main():
-    
-    user_query = "Identify all swimming pools in Los Angeles and provide a map and summary report."
+    user_query = "Identify all swimming pools in Los Angeles and provide me with a map and summary report."
 
-    
-    workflow = DynamicWorkflow(query=user_query)
+    agent = MainAgent()
 
-    
-    result = workflow.execute_workflow()
+    result = agent.run(user_query)
 
-    
     print(result)
 
 if __name__ == "__main__":
