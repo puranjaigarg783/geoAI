@@ -9,5 +9,7 @@ class ExecutionAgent:
         Executes the provided code string and returns the output.
         """
         output = execute_code(code_str)
+        if "Authentication error" in output or "Unauthorized" in output:
+            return "Error: Failed to authenticate with Hugging Face. Please check your token."
         return output
 
