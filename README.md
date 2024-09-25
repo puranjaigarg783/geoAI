@@ -1,4 +1,4 @@
-# Geospatial Analysis AI System
+# GEO AI Project 
 
 ## Introduction
 
