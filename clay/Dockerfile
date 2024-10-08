@@ -27,6 +27,9 @@ ENV PATH /opt/conda/envs/claymodel/bin:$PATH
 # Install Jupyter kernel
 RUN python -m ipykernel install --user --name claymodel
 
+
+RUN mamba update -n claymodel -c conda-forge --all
+
 # Expose the port for JupyterLab
 EXPOSE 8889
 
