@@ -4,17 +4,32 @@ FROM condaforge/miniforge3:latest
 # Set the working directory inside the container
 WORKDIR /app
 
-# Copy the environment.yml to the container
-COPY environment.yml /app
+# Install git and other required tools
+RUN apt-get update && apt-get install -y git
 
-# Install dependencies using Mamba
-RUN mamba env create -f environment.yml
 
-# Activate the environment
-ENV PATH /opt/conda/envs/your_env_name/bin:$PATH
+# Clone the Clay model repository
+RUN git clone https://github.com/Clay-foundation/model /app
 
-# Copy the rest of the application code
-COPY . /app
+# Navigate to the repository folder
+WORKDIR /app/model
 
-# Set the default command to run the application
-CMD ["python", "your_main_script.py"]
+# Copy your custom environment.yml file into the container
+COPY environment.yml /app/model/environment.yml
+
+# Install dependencies using Mamba and create the environment from your environment.yml
+RUN mamba env create --file environment.yml
+
+# Activate the environment by updating the PATH
+ENV PATH /opt/conda/envs/claymodel/bin:$PATH
+
+# Install Jupyter kernel and run JupyterLab
+# Install Jupyter kernel
+RUN python -m ipykernel install --user --name claymodel
+
+# Expose the port for JupyterLab
+EXPOSE 8889
+
+# Set the default command to run JupyterLab
+CMD ["jupyter", "lab", "--ip=0.0.0.0", "--port=8889", "--no-browser", "--allow-root"]
+
