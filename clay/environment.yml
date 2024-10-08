@@ -1,0 +1,41 @@
+name: claymodel
+channels:
+  - conda-forge
+dependencies:
+  - conda-lock~=2.5.6
+  - einops~=0.7.0
+  - fiona~=1.9.5
+  - geopandas-base~=0.14.1
+  - h5netcdf~=1.3.0
+  - jupyter-book~=1.0.0
+  - jupyterlab~=4.0.7
+  - jsonargparse~=4.27.0
+  - lancedb~=0.10.2
+  - lightning~=2.1.0
+  - matplotlib-base~=3.8.2
+  - planetary-computer~=1.0.0
+  - python-box~=6.1.0    # Adjusted version for compatibility
+  - pytorch~=2.1.0
+  - python>=3.9,<3.11    # Broadened Python version constraint
+  - pyarrow~=12.0.1      # Downgraded pyarrow for compatibility
+  - rioxarray~=0.15.0
+  - rasterio~=1.3.10
+  - s3fs~=2024.3.1
+  - scikit-image~=0.22.0
+  - scikit-learn~=1.4.0
+  - stackstac~=0.5.0
+  - torchdata~=0.7.1
+  - torchgeo~=0.5.2
+  - torchvision~=0.16.1
+  - typeshed-client~=2.4.0
+  - vit-pytorch~=1.6.4
+  - wandb~=0.15.12
+  - zarr~=2.16.1
+  - pip
+  - pip:
+      - timm==0.9.7
+      - transformers
+      - huggingface_hub
+      - segmentation-models-pytorch==0.3.4
+
+
