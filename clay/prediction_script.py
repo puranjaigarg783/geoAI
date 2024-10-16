@@ -1,9 +1,7 @@
 # prediction_script.py
 
-# Import necessary modules
 import sys
-sys.path.append("../..")  # Adjust the path to your project's root if necessary
-
+import os
 import math
 import geopandas as gpd
 import numpy as np
@@ -19,7 +17,10 @@ from torchvision.transforms import v2
 import joblib  # For loading the trained classifier
 from matplotlib import pyplot as plt
 from rasterio.enums import Resampling
+import json  # For saving metadata
+from datetime import datetime
 
+sys.path.append("../..")  # Adjust the path to your project's root if necessary
 from src.model import ClayMAEModule
 
 # Load the trained classifier from disk
@@ -174,6 +175,13 @@ location = (37.30939, -8.57207)  # Fresno, California
 start_date = "2018-07-01"
 end_date = "2018-09-01"
 
+# Output directories
+output_image_dir = "output_images"
+output_metadata_file = "output_metadata.json"
+
+# Create the output directory if it doesn't exist
+os.makedirs(output_image_dir, exist_ok=True)
+
 # Fetch new data
 new_items = fetch_new_data(location, start_date, end_date)
 print(f"Found {len(new_items)} new items for prediction.")
@@ -187,7 +195,10 @@ else:
     # Make predictions
     new_predictions = predict_new_data(clf, new_embeddings)
 
-    # Output results and display images
+    # Prepare metadata list
+    metadata_list = []
+
+    # Output results and save images
     for i, prediction in enumerate(new_predictions):
         item_date = new_items[i].datetime.date()
         stack = images[i]
@@ -215,8 +226,31 @@ else:
         plt.axis('off')
 
         # Add title with location, date, and prediction
-        plt.title(
-            f"Location: {location}\nDate: {item_date}\nPrediction: {'Forest fire detected' if prediction == 2 else 'No forest fire detected'}",
-            fontsize=12,
-        )
-        plt.show()
+        title = f"Location: {location}\nDate: {item_date}\nPrediction: {'Forest fire detected' if prediction == 2 else 'No forest fire detected'}"
+        plt.title(title, fontsize=12)
+
+        # Save the image to disk
+        image_filename = f"image_{i}_{item_date}.png"
+        image_path = os.path.join(output_image_dir, image_filename)
+        plt.savefig(image_path, bbox_inches='tight', pad_inches=0)
+        plt.close()
+
+        # Collect metadata
+        metadata = {
+            "image_filename": image_filename,
+            "date": str(item_date),
+            "location": {
+                "latitude": location[0],
+                "longitude": location[1]
+            },
+            "prediction": int(prediction),  # Convert to int for JSON serialization
+            "prediction_label": "Forest fire detected" if prediction == 2 else "No forest fire detected"
+        }
+        metadata_list.append(metadata)
+
+        print(f"Processed image for {item_date} and saved to {image_path}.")
+
+    # Save metadata to JSON file
+    with open(output_metadata_file, 'w') as f:
+        json.dump(metadata_list, f, indent=4)
+    print(f"Metadata saved to '{output_metadata_file}'.")
