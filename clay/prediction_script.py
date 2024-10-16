@@ -26,37 +26,148 @@ from dateutil.parser import parse as date_parse
 sys.path.append("../..")  # Adjust the path to your project's root if necessary
 from src.model import ClayMAEModule
 
-# Load the trained classifier from disk
-clf = joblib.load('svm_classifier.joblib')
-print("Classifier loaded from 'svm_classifier.joblib'.")
+def main():
+    # Load the trained classifier from disk
+    clf = joblib.load('svm_classifier.joblib')
+    print("Classifier loaded from 'svm_classifier.joblib'.")
 
-# Load the Clay model
-device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
-ckpt = "https://clay-model-ckpt.s3.amazonaws.com/v0.5.7/mae_v0.5.7_epoch-13_val-loss-0.3098.ckpt"
+    # Load the Clay model
+    device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
+    ckpt = "https://clay-model-ckpt.s3.amazonaws.com/v0.5.7/mae_v0.5.7_epoch-13_val-loss-0.3098.ckpt"
 
-model = ClayMAEModule.load_from_checkpoint(
-    ckpt, metadata_path="../../configs/metadata.yaml", shuffle=False, mask_ratio=0
-)
-model.eval()
-model = model.to(device)
+    model = ClayMAEModule.load_from_checkpoint(
+        ckpt, metadata_path="../../configs/metadata.yaml", shuffle=False, mask_ratio=0
+    )
+    model.eval()
+    model = model.to(device)
 
-# Define constants
-size = 256
-gsd = 10  # Ground Sample Distance in meters
-platform = "sentinel-2-l2a"
+    print("Loaded Model")
 
-# Prepare band metadata
-metadata = Box(yaml.safe_load(open("../../configs/metadata.yaml")))
-mean = []
-std = []
-waves = []
-band_list = ["blue", "green", "red", "nir"]
-for band_name in band_list:
-    mean.append(metadata[platform].bands.mean[band_name])
-    std.append(metadata[platform].bands.std[band_name])
-    waves.append(metadata[platform].bands.wavelength[band_name])
+    # Define constants
+    size = 256
+    gsd = 10  # Ground Sample Distance in meters
+    platform = "sentinel-2-l2a"
 
-transform = v2.Compose([v2.Normalize(mean=mean, std=std)])
+    # Prepare band metadata
+    metadata = Box(yaml.safe_load(open("../../configs/metadata.yaml")))
+    mean = []
+    std = []
+    waves = []
+    band_list = ["blue", "green", "red", "nir"]
+    for band_name in band_list:
+        mean.append(metadata[platform].bands.mean[band_name])
+        std.append(metadata[platform].bands.std[band_name])
+        waves.append(metadata[platform].bands.wavelength[band_name])
+
+    transform = v2.Compose([v2.Normalize(mean=mean, std=std)])
+
+    # Read extracted parameters from JSON file
+    extracted_params_file = 'extracted_params.json'
+    try:
+        with open(extracted_params_file, 'r') as f:
+            extracted_params = json.load(f)
+    except FileNotFoundError:
+        print(f"Error: '{extracted_params_file}' not found. Please run the backend code first.")
+        return
+
+    # Extract location name and date range
+    location_name = extracted_params.get('location_name')
+    start_date_str = extracted_params.get('start_date')
+    end_date_str = extracted_params.get('end_date')
+
+    if not all([location_name, start_date_str, end_date_str]):
+        print("Error: Missing required parameters in extracted_params.json.")
+        return
+
+    # Geocode the location name to get coordinates
+    geolocator = Nominatim(user_agent="clay_model_demo (your_email@example.com)")
+    location = geolocator.geocode(location_name)
+    if location is None:
+        print(f"Error: Could not geocode location: {location_name}")
+        return
+
+    latitude = location.latitude
+    longitude = location.longitude
+    location_coords = (latitude, longitude)
+
+    # Parse dates
+    start_date = date_parse(start_date_str).date()
+    end_date = date_parse(end_date_str).date()
+
+    print(f"Using location: {location_name} ({latitude}, {longitude})")
+    print(f"Using date range: {start_date} to {end_date}")
+
+    # Output directories
+    output_image_dir = "output_images"
+    output_metadata_file = "output_metadata.json"
+
+    # Create the output directory if it doesn't exist
+    os.makedirs(output_image_dir, exist_ok=True)
+
+    # Fetch new data
+    new_items = fetch_new_data(location_coords, str(start_date), str(end_date))
+    print(f"Found {len(new_items)} new items for prediction.")
+
+    if len(new_items) == 0:
+        print("No new data available for the specified location and date range.")
+    else:
+        # Generate embeddings and collect images
+        new_embeddings, images = generate_new_embeddings(
+            new_items, location_coords, model, transform, platform, device, waves, size, gsd
+        )
+
+        # Make predictions
+        new_predictions = predict_new_data(clf, new_embeddings)
+
+        # Prepare metadata list
+        metadata_list = []
+
+        # Output results and save images
+        for i, prediction in enumerate(new_predictions):
+            item_date = new_items[i].datetime.date()
+            stack = images[i]
+
+            # Extract RGB image and remove singleton dimensions
+            rgb_image = stack.sel(band=["red", "green", "blue"]).isel(time=0)
+
+            # Ensure dimensions are (y, x, band)
+            rgb_image = rgb_image.transpose("y", "x", "band")
+
+            # Convert to numpy array
+            rgb_array = rgb_image.values
+
+            # Handle missing or invalid data
+            if np.all(np.isnan(rgb_array)):
+                print(f"No valid data available for {item_date}. Skipping image.")
+                continue
+
+            # Clip values and normalize
+            rgb_array = np.clip(rgb_array, 0, 2000) / 2000  # Normalize to [0, 1]
+
+            # Save the image to disk
+            image_filename = f"image_{i}_{item_date}.png"
+            image_path = os.path.join(output_image_dir, image_filename)
+            plt.imsave(image_path, rgb_array)
+            plt.close()
+
+            # Collect metadata
+            metadata = {
+                "image_filename": image_filename,
+                "date": str(item_date),
+                "location": {
+                    "name": location_name,
+                    "latitude": latitude,
+                    "longitude": longitude
+                },
+                "prediction": int(prediction),  # Convert to int for JSON serialization
+                "prediction_label": "Forest fire detected" if prediction == 2 else "No forest fire detected"
+            }
+            metadata_list.append(metadata)
+
+        # Save metadata to JSON file
+        with open(output_metadata_file, 'w') as f:
+            json.dump(metadata_list, f, indent=4)
+        print(f"Metadata saved to '{output_metadata_file}'.")
 
 # Define normalization functions
 def normalize_timestamp(date):
@@ -89,7 +200,7 @@ def fetch_new_data(location, start_date, end_date):
     return search.get_all_items()
 
 # Function to generate embeddings and collect images
-def generate_new_embeddings(new_items, location):
+def generate_new_embeddings(new_items, location, model, transform, platform, device, waves, size, gsd):
     new_embeddings = []
     images = []
 
@@ -172,127 +283,6 @@ def generate_new_embeddings(new_items, location):
 def predict_new_data(clf, new_embeddings):
     predictions = clf.predict(new_embeddings + 100)
     return predictions
-
-def main():
-    # Read extracted parameters from JSON file
-    extracted_params_file = 'extracted_params.json'
-    try:
-        with open(extracted_params_file, 'r') as f:
-            extracted_params = json.load(f)
-    except FileNotFoundError:
-        print(f"Error: '{extracted_params_file}' not found. Please run 'query_processing.py' first.")
-        return
-
-    # Extract location name and date range
-    location_name = extracted_params.get('location_name')
-    start_date_str = extracted_params.get('start_date')
-    end_date_str = extracted_params.get('end_date')
-
-    if not all([location_name, start_date_str, end_date_str]):
-        print("Error: Missing required parameters in extracted_params.json.")
-        return
-
-    # Geocode the location name to get coordinates
-    geolocator = Nominatim(user_agent="clay_model_demo (pgarg4@dons.usfca.edu)")
-    print(location_name)
-    location = geolocator.geocode(location_name)
-    if location is None:
-        print(f"Error: Could not geocode location: {location_name}")
-        return
-
-    latitude = location.latitude
-    print(latitude)
-    longitude = location.longitude
-    print(longitude)
-    location_coords = (latitude, longitude)
-
-    # Parse dates
-    start_date = date_parse(start_date_str).date()
-    end_date = date_parse(end_date_str).date()
-
-    print(f"Using location: {location_name} ({latitude}, {longitude})")
-    print(f"Using date range: {start_date} to {end_date}")
-
-    # Output directories
-    output_image_dir = "output_images"
-    output_metadata_file = "output_metadata.json"
-
-    # Create the output directory if it doesn't exist
-    os.makedirs(output_image_dir, exist_ok=True)
-
-    # Fetch new data
-    new_items = fetch_new_data(location_coords, str(start_date), str(end_date))
-    print(f"Found {len(new_items)} new items for prediction.")
-
-    if len(new_items) == 0:
-        print("No new data available for the specified location and date range.")
-    else:
-        # Generate embeddings and collect images
-        new_embeddings, images = generate_new_embeddings(new_items, location_coords)
-
-        # Make predictions
-        new_predictions = predict_new_data(clf, new_embeddings)
-
-        # Prepare metadata list
-        metadata_list = []
-
-        # Output results and save images
-        for i, prediction in enumerate(new_predictions):
-            item_date = new_items[i].datetime.date()
-            stack = images[i]
-
-            # Extract RGB image and remove singleton dimensions
-            rgb_image = stack.sel(band=["red", "green", "blue"]).isel(time=0)
-
-            # Ensure dimensions are (y, x, band)
-            rgb_image = rgb_image.transpose("y", "x", "band")
-
-            # Convert to numpy array
-            rgb_array = rgb_image.values
-
-            # Handle missing or invalid data
-            if np.all(np.isnan(rgb_array)):
-                print(f"No valid data available for {item_date}. Skipping image.")
-                continue
-
-            # Clip values and normalize
-            rgb_array = np.clip(rgb_array, 0, 2000) / 2000  # Normalize to [0, 1]
-
-            # Plot the image
-            plt.figure(figsize=(6, 6))
-            plt.imshow(rgb_array)
-            plt.axis('off')
-
-            # Add title with location, date, and prediction
-            title = f"Location: {location_name} ({latitude:.2f}, {longitude:.2f})\nDate: {item_date}\nPrediction: {'Forest fire detected' if prediction == 2 else 'No forest fire detected'}"
-            plt.title(title, fontsize=12)
-
-            # Save the image to disk
-            image_filename = f"image_{i}_{item_date}.png"
-            image_path = os.path.join(output_image_dir, image_filename)
-            plt.savefig(image_path, bbox_inches='tight', pad_inches=0)
-            plt.close()
-
-            # Collect metadata
-            metadata = {
-                "image_filename": image_filename,
-                "date": str(item_date),
-                "location": {
-                    "name": location_name,
-                    "latitude": latitude,
-                    "longitude": longitude
-                },
-                "prediction": int(prediction),  # Convert to int for JSON serialization
-                "prediction_label": "Forest fire detected" if prediction == 2 else "No forest fire detected"
-            }
-            metadata_list.append(metadata)
-
-            print(f"Processed image for {item_date} and saved to {image_path}.")
-
-        # Save metadata to JSON file
-        with open(output_metadata_file, 'w') as f:
-            json.dump(metadata_list, f, indent=4)
-        print(f"Metadata saved to '{output_metadata_file}'.")
 
 if __name__ == "__main__":
     main()
