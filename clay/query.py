@@ -108,7 +108,7 @@ def main():
         return
 
     # Example query (you can replace this with user input)
-    query = "detect forest fires in San Diego from September 7 2024 to september 9 2024"
+    query = "detect forest fires in Croft, El Dorado County, California from 14 August 2021 to 23 August 2021"
 
     # Extract information from the query
     extracted_info = extract_info_from_query(query)

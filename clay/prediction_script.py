@@ -14,12 +14,15 @@ from box import Box
 from shapely.geometry import Point
 from sklearn import svm
 from torchvision.transforms import v2
-import joblib  # For loading the trained classifier
+import joblib
 from matplotlib import pyplot as plt
 from rasterio.enums import Resampling
-import json  # For saving metadata
+import json
 from datetime import datetime
+from geopy.geocoders import Nominatim
+from dateutil.parser import parse as date_parse
 
+# Import the Clay model
 sys.path.append("../..")  # Adjust the path to your project's root if necessary
 from src.model import ClayMAEModule
 
@@ -78,7 +81,7 @@ def fetch_new_data(location, start_date, end_date):
     search = catalog.search(
         collections=[COLLECTION],
         datetime=f"{start_date}/{end_date}",
-        bbox=(lon - 0.00001, lat - 0.00001, lon + 0.00001, lat + 0.00001),
+        bbox=(lon - 0.0001, lat - 0.0001, lon + 0.0001, lat + 0.0001),
         max_items=100,
         query={"eo:cloud_cover": {"lt": 80}},
     )
@@ -170,87 +173,126 @@ def predict_new_data(clf, new_embeddings):
     predictions = clf.predict(new_embeddings + 100)
     return predictions
 
-# Example input (replace with actual input as needed)
-location = (37.30939, -8.57207)  # Fresno, California
-start_date = "2018-07-01"
-end_date = "2018-09-01"
+def main():
+    # Read extracted parameters from JSON file
+    extracted_params_file = 'extracted_params.json'
+    try:
+        with open(extracted_params_file, 'r') as f:
+            extracted_params = json.load(f)
+    except FileNotFoundError:
+        print(f"Error: '{extracted_params_file}' not found. Please run 'query_processing.py' first.")
+        return
 
-# Output directories
-output_image_dir = "output_images"
-output_metadata_file = "output_metadata.json"
+    # Extract location name and date range
+    location_name = extracted_params.get('location_name')
+    start_date_str = extracted_params.get('start_date')
+    end_date_str = extracted_params.get('end_date')
 
-# Create the output directory if it doesn't exist
-os.makedirs(output_image_dir, exist_ok=True)
+    if not all([location_name, start_date_str, end_date_str]):
+        print("Error: Missing required parameters in extracted_params.json.")
+        return
 
-# Fetch new data
-new_items = fetch_new_data(location, start_date, end_date)
-print(f"Found {len(new_items)} new items for prediction.")
+    # Geocode the location name to get coordinates
+    geolocator = Nominatim(user_agent="clay_model_demo (pgarg4@dons.usfca.edu)")
+    print(location_name)
+    location = geolocator.geocode(location_name)
+    if location is None:
+        print(f"Error: Could not geocode location: {location_name}")
+        return
 
-if len(new_items) == 0:
-    print("No new data available for the specified location and date range.")
-else:
-    # Generate embeddings and collect images
-    new_embeddings, images = generate_new_embeddings(new_items, location)
+    latitude = location.latitude
+    print(latitude)
+    longitude = location.longitude
+    print(longitude)
+    location_coords = (latitude, longitude)
 
-    # Make predictions
-    new_predictions = predict_new_data(clf, new_embeddings)
+    # Parse dates
+    start_date = date_parse(start_date_str).date()
+    end_date = date_parse(end_date_str).date()
 
-    # Prepare metadata list
-    metadata_list = []
+    print(f"Using location: {location_name} ({latitude}, {longitude})")
+    print(f"Using date range: {start_date} to {end_date}")
 
-    # Output results and save images
-    for i, prediction in enumerate(new_predictions):
-        item_date = new_items[i].datetime.date()
-        stack = images[i]
+    # Output directories
+    output_image_dir = "output_images"
+    output_metadata_file = "output_metadata.json"
 
-        # Extract RGB image and remove singleton dimensions
-        rgb_image = stack.sel(band=["red", "green", "blue"]).isel(time=0)
+    # Create the output directory if it doesn't exist
+    os.makedirs(output_image_dir, exist_ok=True)
 
-        # Ensure dimensions are (y, x, band)
-        rgb_image = rgb_image.transpose("y", "x", "band")
+    # Fetch new data
+    new_items = fetch_new_data(location_coords, str(start_date), str(end_date))
+    print(f"Found {len(new_items)} new items for prediction.")
 
-        # Convert to numpy array
-        rgb_array = rgb_image.values
+    if len(new_items) == 0:
+        print("No new data available for the specified location and date range.")
+    else:
+        # Generate embeddings and collect images
+        new_embeddings, images = generate_new_embeddings(new_items, location_coords)
 
-        # Handle missing or invalid data
-        if np.all(np.isnan(rgb_array)):
-            print(f"No valid data available for {item_date}. Skipping image.")
-            continue
+        # Make predictions
+        new_predictions = predict_new_data(clf, new_embeddings)
 
-        # Clip values and normalize
-        rgb_array = np.clip(rgb_array, 0, 2000) / 2000  # Normalize to [0, 1]
+        # Prepare metadata list
+        metadata_list = []
 
-        # Plot the image
-        plt.figure(figsize=(6, 6))
-        plt.imshow(rgb_array)
-        plt.axis('off')
+        # Output results and save images
+        for i, prediction in enumerate(new_predictions):
+            item_date = new_items[i].datetime.date()
+            stack = images[i]
 
-        # Add title with location, date, and prediction
-        title = f"Location: {location}\nDate: {item_date}\nPrediction: {'Forest fire detected' if prediction == 2 else 'No forest fire detected'}"
-        plt.title(title, fontsize=12)
+            # Extract RGB image and remove singleton dimensions
+            rgb_image = stack.sel(band=["red", "green", "blue"]).isel(time=0)
 
-        # Save the image to disk
-        image_filename = f"image_{i}_{item_date}.png"
-        image_path = os.path.join(output_image_dir, image_filename)
-        plt.savefig(image_path, bbox_inches='tight', pad_inches=0)
-        plt.close()
+            # Ensure dimensions are (y, x, band)
+            rgb_image = rgb_image.transpose("y", "x", "band")
 
-        # Collect metadata
-        metadata = {
-            "image_filename": image_filename,
-            "date": str(item_date),
-            "location": {
-                "latitude": location[0],
-                "longitude": location[1]
-            },
-            "prediction": int(prediction),  # Convert to int for JSON serialization
-            "prediction_label": "Forest fire detected" if prediction == 2 else "No forest fire detected"
-        }
-        metadata_list.append(metadata)
+            # Convert to numpy array
+            rgb_array = rgb_image.values
 
-        print(f"Processed image for {item_date} and saved to {image_path}.")
+            # Handle missing or invalid data
+            if np.all(np.isnan(rgb_array)):
+                print(f"No valid data available for {item_date}. Skipping image.")
+                continue
 
-    # Save metadata to JSON file
-    with open(output_metadata_file, 'w') as f:
-        json.dump(metadata_list, f, indent=4)
-    print(f"Metadata saved to '{output_metadata_file}'.")
+            # Clip values and normalize
+            rgb_array = np.clip(rgb_array, 0, 2000) / 2000  # Normalize to [0, 1]
+
+            # Plot the image
+            plt.figure(figsize=(6, 6))
+            plt.imshow(rgb_array)
+            plt.axis('off')
+
+            # Add title with location, date, and prediction
+            title = f"Location: {location_name} ({latitude:.2f}, {longitude:.2f})\nDate: {item_date}\nPrediction: {'Forest fire detected' if prediction == 2 else 'No forest fire detected'}"
+            plt.title(title, fontsize=12)
+
+            # Save the image to disk
+            image_filename = f"image_{i}_{item_date}.png"
+            image_path = os.path.join(output_image_dir, image_filename)
+            plt.savefig(image_path, bbox_inches='tight', pad_inches=0)
+            plt.close()
+
+            # Collect metadata
+            metadata = {
+                "image_filename": image_filename,
+                "date": str(item_date),
+                "location": {
+                    "name": location_name,
+                    "latitude": latitude,
+                    "longitude": longitude
+                },
+                "prediction": int(prediction),  # Convert to int for JSON serialization
+                "prediction_label": "Forest fire detected" if prediction == 2 else "No forest fire detected"
+            }
+            metadata_list.append(metadata)
+
+            print(f"Processed image for {item_date} and saved to {image_path}.")
+
+        # Save metadata to JSON file
+        with open(output_metadata_file, 'w') as f:
+            json.dump(metadata_list, f, indent=4)
+        print(f"Metadata saved to '{output_metadata_file}'.")
+
+if __name__ == "__main__":
+    main()

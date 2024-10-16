@@ -21,10 +21,10 @@ import joblib  # For saving the trained classifier
 
 from src.model import ClayMAEModule
 
-# Set the location and date range of interest for training data
-lat, lon = 37.30939, -8.57207  # Monchique, Portugal (location of a forest fire)
-start = "2018-07-01"
-end = "2018-09-01"
+# Set the new location and date range of interest for training data
+lat, lon = 38.5800, -120.4500
+start = "2021-08-10"
+end = "2021-09-25"
 
 # Get data from STAC catalog
 STAC_API = "https://earth-search.aws.element84.com/v1"
@@ -150,22 +150,29 @@ with torch.no_grad():
 embeddings = unmsk_patch[:, 0, :].cpu().numpy()
 print(f"Embeddings shape: {embeddings.shape}")
 
-# Label the images (manually labeled for this example)
-labels = np.array([0, 1, 0, 1, 1, 1, 1, 2, 2, 2, 2, 2])  # 0: Cloud, 1: Forest, 2: Fire
+# Label the images (0: Cloud, 1: Forest, 2: Fire)
+labels = np.array([1, 1, 0, 0, 2, 2, 0, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2])
 
 # Split into training and testing sets
-fit_indices = [0, 1, 3, 4, 7, 8, 9]
-test_indices = [2, 5, 6, 10, 11]
+num_samples = len(embeddings)
+num_train = int(0.7 * num_samples)  # Use 70% for training
+fit_indices = list(range(num_train))
+test_indices = list(range(num_train, num_samples))
 
 # Train the Support Vector Machine classifier
 clf = svm.SVC()
 clf.fit(embeddings[fit_indices] + 100, labels[fit_indices])
 
-# Optionally, evaluate the classifier
-# predictions = clf.predict(embeddings[test_indices] + 100)
-# accuracy = np.mean(predictions == labels[test_indices])
-# print(f"Classifier accuracy on test set: {accuracy * 100:.2f}%")
+# Evaluate the classifier
+predictions = clf.predict(embeddings[test_indices] + 100)
+accuracy = np.mean(predictions == labels[test_indices])
+print(f"Classifier accuracy on test set: {accuracy * 100:.2f}%")
 
 # Save the trained classifier to disk
 joblib.dump(clf, 'svm_classifier.joblib')
 print("Classifier trained and saved to 'svm_classifier.joblib'.")
+
+# Print detailed results
+print("\nDetailed classification results:")
+for i, (true_label, pred_label) in enumerate(zip(labels[test_indices], predictions)):
+    print(f"Image {test_indices[i]}: True label: {true_label}, Predicted: {pred_label}")
